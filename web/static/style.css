@@ -264,6 +264,54 @@ td a:hover {
     font-size: 1.1rem;
 }
 
+/* Save / Delete buttons */
+.btn-save {
+    background: none;
+    border: 1px solid #1a1a2e;
+    color: #1a1a2e;
+    padding: 0.3rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.btn-save:hover:not(.saved) {
+    background: #1a1a2e;
+    color: #fff;
+}
+
+.btn-save.saved {
+    background: #d4edda;
+    border-color: #c3e6cb;
+    color: #155724;
+    cursor: default;
+}
+
+.btn-delete {
+    background: none;
+    border: 1px solid #dc3545;
+    color: #dc3545;
+    padding: 0.3rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.btn-delete:hover {
+    background: #dc3545;
+    color: #fff;
+}
+
+.inline-form {
+    display: inline;
+}
+
 /* Results */
 .results {
     margin-top: 1rem;

@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from scraper.wttj import WTTJScraper, CONTRACT_TYPES, REMOTE_OPTIONS
 from data.storage import JobStorage
 
@@ -63,18 +63,42 @@ def index():
         if form["salary_range"]:
             jobs = _filter_by_salary(jobs, form["salary_range"])
 
-        total_scraped = len(jobs)
-        new_jobs = storage.add(jobs)
-        new_count = len(new_jobs)
-        results = [j.to_dict() for j in jobs]
+        # Marquer les offres déjà sauvegardées
+        saved = storage.saved_urls()
+        results = []
+        for j in jobs:
+            d = j.to_dict()
+            d["is_saved"] = j.url in saved
+            results.append(d)
 
-        flash(f"{total_scraped} offres trouvées, {new_count} nouvelles sauvegardées.", "success")
+        flash(f"{len(results)} offres trouvées.", "success")
 
     return render_template("index.html",
                            results=results,
                            form=form,
                            contract_types=CONTRACT_TYPES,
                            remote_options=REMOTE_OPTIONS)
+
+
+@app.route("/save", methods=["POST"])
+def save_job():
+    """Sauvegarde une offre individuelle (appelé en AJAX)."""
+    job_data = request.get_json()
+    if not job_data or not job_data.get("url"):
+        return jsonify({"error": "Données manquantes"}), 400
+
+    saved = storage.save_one(job_data)
+    return jsonify({"saved": saved})
+
+
+@app.route("/delete", methods=["POST"])
+def delete_job():
+    """Supprime une offre individuelle."""
+    url = request.form.get("url")
+    if url:
+        storage.delete_one(url)
+        flash("Offre supprimée.", "success")
+    return redirect(url_for("saved"))
 
 
 @app.route("/saved")

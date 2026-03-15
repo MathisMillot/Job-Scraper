@@ -1,6 +1,5 @@
 import sqlite3
 from pathlib import Path
-from scraper.wttj import Job
 
 DATA_DIR = Path(__file__).parent
 DEFAULT_DB = DATA_DIR / "jobs.db"
@@ -30,23 +29,35 @@ class JobStorage:
         """)
         self._conn.commit()
 
-    def add(self, jobs: list[Job]) -> list[Job]:
-        """Ajoute des jobs et retourne uniquement les nouveaux (non dupliqués)."""
-        new_jobs = []
-        for job in jobs:
-            try:
-                self._conn.execute(
-                    "INSERT INTO jobs (url, title, company, location, published_at, contract_type, remote, salary) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (job.url, job.title, job.company, job.location,
-                     job.published_at, job.contract_type, job.remote, job.salary),
-                )
-                new_jobs.append(job)
-            except sqlite3.IntegrityError:
-                pass  # doublon, on ignore
-        if new_jobs:
+    def save_one(self, job_data: dict) -> bool:
+        """Sauvegarde une seule offre. Retourne True si nouveau, False si doublon."""
+        try:
+            self._conn.execute(
+                "INSERT INTO jobs (url, title, company, location, published_at, contract_type, remote, salary) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (job_data["url"], job_data["title"], job_data["company"], job_data["location"],
+                 job_data["published_at"], job_data["contract_type"], job_data["remote"], job_data.get("salary")),
+            )
             self._conn.commit()
-        return new_jobs
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def delete_one(self, url: str) -> bool:
+        """Supprime une offre par URL. Retourne True si supprimée."""
+        cursor = self._conn.execute("DELETE FROM jobs WHERE url = ?", (url,))
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def is_saved(self, url: str) -> bool:
+        """Vérifie si une offre est déjà sauvegardée."""
+        cursor = self._conn.execute("SELECT 1 FROM jobs WHERE url = ?", (url,))
+        return cursor.fetchone() is not None
+
+    def saved_urls(self) -> set[str]:
+        """Retourne l'ensemble des URLs sauvegardées."""
+        cursor = self._conn.execute("SELECT url FROM jobs")
+        return {row["url"] for row in cursor.fetchall()}
 
     def all(self, order_by: str = "published_at DESC") -> list[dict]:
         """Retourne tous les jobs stockés, triés chronologiquement."""

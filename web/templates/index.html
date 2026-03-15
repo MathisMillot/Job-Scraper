@@ -84,6 +84,7 @@
                 <th>Remote</th>
                 <th>Salaire</th>
                 <th>Date</th>
+                <th></th>
             </tr>
         </thead>
         <tbody>
@@ -96,6 +97,14 @@
                 <td>{{ job.remote | title }}</td>
                 <td>{{ job.salary or '—' }}</td>
                 <td>{{ job.published_at[:10] }}</td>
+                <td>
+                    <button
+                        class="btn-save {% if job.is_saved %}saved{% endif %}"
+                        data-job='{{ job | tojson }}'
+                        {% if job.is_saved %}disabled{% endif %}>
+                        {{ "Sauvegardé" if job.is_saved else "Sauvegarder" }}
+                    </button>
+                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -107,6 +116,7 @@
 {% endif %}
 
 <script>
+/* Tags */
 const container = document.getElementById('tagsContainer');
 const input = document.getElementById('keywordInput');
 const hidden = document.getElementById('keywordsHidden');
@@ -120,7 +130,6 @@ function updateHidden() {
 function addTag(text) {
     text = text.trim();
     if (!text) return;
-    // Eviter les doublons
     const existing = Array.from(container.querySelectorAll('.tag')).map(t => t.firstChild.textContent.trim().toLowerCase());
     if (existing.includes(text.toLowerCase())) return;
 
@@ -137,31 +146,44 @@ function addTag(text) {
     updateHidden();
 }
 
-// Entrée ou virgule pour ajouter un tag
 input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ',') {
         e.preventDefault();
         addTag(input.value.replace(',', ''));
         input.value = '';
     }
-    // Backspace sur input vide supprime le dernier tag
     if (e.key === 'Backspace' && !input.value) {
         const tags = container.querySelectorAll('.tag');
         if (tags.length) { tags[tags.length - 1].remove(); updateHidden(); }
     }
 });
 
-// Clic sur le container focus l'input
 container.addEventListener('click', () => input.focus());
 
-// Boutons de suppression existants (après POST)
 container.querySelectorAll('.tag-remove').forEach(btn => {
     btn.addEventListener('click', () => { btn.parentElement.remove(); updateHidden(); });
 });
 
-// Soumettre aussi le mot-clé en cours de saisie
 document.getElementById('searchForm').addEventListener('submit', () => {
     if (input.value.trim()) { addTag(input.value); input.value = ''; }
+});
+
+/* Save buttons */
+document.querySelectorAll('.btn-save:not(.saved)').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const job = JSON.parse(btn.dataset.job);
+        fetch('/save', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(job),
+        })
+        .then(r => r.json())
+        .then(data => {
+            btn.textContent = 'Sauvegardé';
+            btn.classList.add('saved');
+            btn.disabled = true;
+        });
+    });
 });
 </script>
 {% endblock %}
