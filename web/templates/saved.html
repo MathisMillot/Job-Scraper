@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Offres sauvegardées - Job Scraper{% endblock %}
+
+{% block content %}
+<div class="saved-header">
+    <h1>Offres sauvegardées ({{ count }})</h1>
+    {% if count > 0 %}
+    <form method="POST" action="{{ url_for('clear') }}" class="clear-form">
+        <button type="submit" class="btn btn-danger" onclick="return confirm('Supprimer toutes les offres ?')">Tout supprimer</button>
+    </form>
+    {% endif %}
+</div>
+
+{% if jobs %}
+<table>
+    <thead>
+        <tr>
+            <th>Titre</th>
+            <th>Entreprise</th>
+            <th>Lieu</th>
+            <th>Contrat</th>
+            <th>Remote</th>
+            <th>Salaire</th>
+            <th>Date</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr>
+            <td><a href="{{ job.url }}" target="_blank">{{ job.title }}</a></td>
+            <td>{{ job.company }}</td>
+            <td>{{ job.location }}</td>
+            <td>{{ job.contract_type | replace('_', ' ') | title }}</td>
+            <td>{{ job.remote | title }}</td>
+            <td>{{ job.salary or '—' }}</td>
+            <td>{{ job.published_at[:10] }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+    <p class="empty">Aucune offre sauvegardée. Lancez une recherche pour commencer.</p>
+{% endif %}
+{% endblock %}

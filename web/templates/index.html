@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Recherche - Job Scraper{% endblock %}
+
+{% block content %}
+<h1>Rechercher des offres d'emploi</h1>
+
+<form method="POST" class="search-form" id="searchForm">
+    <div class="form-grid">
+        <div class="form-group form-group-wide">
+            <label for="keywordInput">Mots-clés</label>
+            <div class="tags-container" id="tagsContainer">
+                {% for kw in form.keywords %}
+                    <span class="tag">{{ kw }}<button type="button" class="tag-remove">&times;</button></span>
+                {% endfor %}
+                <input type="text" id="keywordInput" placeholder="Tapez un mot-clé puis Entrée...">
+            </div>
+            <input type="hidden" name="keywords" id="keywordsHidden" value="{{ form.keywords | join(',') }}">
+        </div>
+
+        <div class="form-group">
+            <label for="location">Localisation</label>
+            <input type="text" id="location" name="location" placeholder="ex: Paris, Lyon..."
+                   value="{{ form.location }}">
+        </div>
+
+        <div class="form-group">
+            <label for="company">Entreprise</label>
+            <input type="text" id="company" name="company" placeholder="ex: Datadog, Google..."
+                   value="{{ form.company }}">
+        </div>
+
+        <div class="form-group">
+            <label for="contract_type">Type de contrat</label>
+            <select id="contract_type" name="contract_type">
+                <option value="">Tous</option>
+                {% for ct in contract_types %}
+                    <option value="{{ ct }}" {% if form.contract_type == ct %}selected{% endif %}>
+                        {{ ct | replace('_', ' ') | title }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="remote">Remote</label>
+            <select id="remote" name="remote">
+                <option value="">Tous</option>
+                {% for r in remote_options %}
+                    <option value="{{ r }}" {% if form.remote == r %}selected{% endif %}>
+                        {{ r | title }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="salary_range">Salaire annuel</label>
+            <select id="salary_range" name="salary_range">
+                <option value="">Tous</option>
+                <option value="0-25k" {% if form.salary_range == '0-25k' %}selected{% endif %}>0 - 25k</option>
+                <option value="25k-35k" {% if form.salary_range == '25k-35k' %}selected{% endif %}>25k - 35k</option>
+                <option value="35k-45k" {% if form.salary_range == '35k-45k' %}selected{% endif %}>35k - 45k</option>
+                <option value="45k-60k" {% if form.salary_range == '45k-60k' %}selected{% endif %}>45k - 60k</option>
+                <option value="60k+" {% if form.salary_range == '60k+' %}selected{% endif %}>60k+</option>
+            </select>
+        </div>
+    </div>
+
+    <button type="submit" class="btn">Rechercher</button>
+</form>
+
+{% if results is not none %}
+<section class="results">
+    <h2>{{ results | length }} résultat{{ 's' if results | length > 1 }}</h2>
+
+    {% if results %}
+    <table>
+        <thead>
+            <tr>
+                <th>Titre</th>
+                <th>Entreprise</th>
+                <th>Lieu</th>
+                <th>Contrat</th>
+                <th>Remote</th>
+                <th>Salaire</th>
+                <th>Date</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for job in results %}
+            <tr>
+                <td><a href="{{ job.url }}" target="_blank">{{ job.title }}</a></td>
+                <td>{{ job.company }}</td>
+                <td>{{ job.location }}</td>
+                <td>{{ job.contract_type | replace('_', ' ') | title }}</td>
+                <td>{{ job.remote | title }}</td>
+                <td>{{ job.salary or '—' }}</td>
+                <td>{{ job.published_at[:10] }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+        <p>Aucun résultat trouvé.</p>
+    {% endif %}
+</section>
+{% endif %}
+
+<script>
+const container = document.getElementById('tagsContainer');
+const input = document.getElementById('keywordInput');
+const hidden = document.getElementById('keywordsHidden');
+
+function updateHidden() {
+    const tags = container.querySelectorAll('.tag');
+    const values = Array.from(tags).map(t => t.firstChild.textContent.trim());
+    hidden.value = values.join(',');
+}
+
+function addTag(text) {
+    text = text.trim();
+    if (!text) return;
+    // Eviter les doublons
+    const existing = Array.from(container.querySelectorAll('.tag')).map(t => t.firstChild.textContent.trim().toLowerCase());
+    if (existing.includes(text.toLowerCase())) return;
+
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = text;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tag-remove';
+    btn.innerHTML = '&times;';
+    btn.addEventListener('click', () => { tag.remove(); updateHidden(); });
+    tag.appendChild(btn);
+    container.insertBefore(tag, input);
+    updateHidden();
+}
+
+// Entrée ou virgule pour ajouter un tag
+input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        addTag(input.value.replace(',', ''));
+        input.value = '';
+    }
+    // Backspace sur input vide supprime le dernier tag
+    if (e.key === 'Backspace' && !input.value) {
+        const tags = container.querySelectorAll('.tag');
+        if (tags.length) { tags[tags.length - 1].remove(); updateHidden(); }
+    }
+});
+
+// Clic sur le container focus l'input
+container.addEventListener('click', () => input.focus());
+
+// Boutons de suppression existants (après POST)
+container.querySelectorAll('.tag-remove').forEach(btn => {
+    btn.addEventListener('click', () => { btn.parentElement.remove(); updateHidden(); });
+});
+
+// Soumettre aussi le mot-clé en cours de saisie
+document.getElementById('searchForm').addEventListener('submit', () => {
+    if (input.value.trim()) { addTag(input.value); input.value = ''; }
+});
+</script>
+{% endblock %}
