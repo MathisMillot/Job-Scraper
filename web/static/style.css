@@ -143,9 +143,10 @@ h1 {
 .tags-container input {
     border: none !important;
     outline: none;
-    padding: 0.2rem;
+    padding: 0.2rem !important;
     flex: 1;
-    min-width: 120px;
+    min-width: 80px;
+    width: auto !important;
     font-size: 0.95rem;
 }
 
@@ -175,6 +176,111 @@ h1 {
 
 .tag-remove:hover {
     color: #fff;
+}
+
+/* Sources section */
+.sources-section {
+    margin-bottom: 1.2rem;
+}
+
+.section-label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+    color: #555;
+}
+
+.sources-checkboxes {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #1a1a2e;
+}
+
+/* ATS slugs */
+.ats-slugs {
+    margin-bottom: 1.2rem;
+}
+
+.ats-slugs .hint {
+    display: block;
+    margin-top: 0.3rem;
+    font-size: 0.8rem;
+    color: #888;
+}
+
+.tag-location {
+    background: #0077b6;
+}
+
+.tags-compact {
+    min-height: 38px;
+    padding: 0.3rem 0.5rem;
+}
+
+.tags-compact input {
+    min-width: 80px;
+}
+
+.slug-help {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.slug-help summary {
+    cursor: pointer;
+    color: #1a1a2e;
+    font-weight: 500;
+}
+
+.slug-lists {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.slug-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-top: 0.3rem;
+}
+
+.slug-chip {
+    background: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    color: #333;
+}
+
+.slug-chip:hover {
+    background: #1a1a2e;
+    color: #fff;
+    border-color: #1a1a2e;
+}
+
+.tag-ats {
+    background: #e94560;
 }
 
 /* Buttons */
@@ -310,6 +416,33 @@ td a:hover {
 
 .inline-form {
     display: inline;
+}
+
+/* Source badges */
+.source-badge {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+}
+
+.source-wttj {
+    background: #1a1a2e;
+    color: #fff;
+}
+
+.source-greenhouse {
+    background: #24a148;
+    color: #fff;
+}
+
+.source-lever {
+    background: #6b4fbb;
+    color: #fff;
 }
 
 /* Results */

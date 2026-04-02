@@ -15,6 +15,7 @@
 <table>
     <thead>
         <tr>
+            <th>Source</th>
             <th>Titre</th>
             <th>Entreprise</th>
             <th>Lieu</th>
@@ -28,6 +29,7 @@
     <tbody>
         {% for job in jobs %}
         <tr>
+            <td><span class="source-badge source-{{ (job.source or 'wttj') | lower | replace(' ', '') }}">{{ job.source or 'WTTJ' }}</span></td>
             <td><a href="{{ job.url }}" target="_blank">{{ job.title }}</a></td>
             <td>{{ job.company }}</td>
             <td>{{ job.location }}</td>

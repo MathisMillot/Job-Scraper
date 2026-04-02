@@ -5,6 +5,62 @@
 <h1>Rechercher des offres d'emploi</h1>
 
 <form method="POST" class="search-form" id="searchForm">
+    <!-- Sources -->
+    <div class="sources-section">
+        <label class="section-label">Sources</label>
+        <div class="sources-checkboxes">
+            <label class="checkbox-label">
+                <input type="checkbox" name="sources" value="wttj"
+                       {% if 'wttj' in form.sources %}checked{% endif %}>
+                Welcome to the Jungle
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" name="sources" value="greenhouse"
+                       {% if 'greenhouse' in form.sources %}checked{% endif %}>
+                Greenhouse
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" name="sources" value="lever"
+                       {% if 'lever' in form.sources %}checked{% endif %}>
+                Lever
+            </label>
+        </div>
+    </div>
+
+    <!-- Company slugs pour Greenhouse/Lever -->
+    <div class="form-group form-group-wide ats-slugs" id="atsSlugsGroup">
+        <label for="slugInput">Entreprises Greenhouse/Lever (slugs)</label>
+        <div class="tags-container" id="slugsContainer">
+            {% for s in form.company_slugs %}
+                <span class="tag tag-ats">{{ s }}<button type="button" class="tag-remove">&times;</button></span>
+            {% endfor %}
+            <input type="text" id="slugInput" placeholder="ex: datadog, spotify, cloudflare...">
+        </div>
+        <input type="hidden" name="company_slugs" id="slugsHidden" value="{{ form.company_slugs | join(',') }}">
+        <small class="hint">Le slug est le nom dans l'URL carrière de l'entreprise (ex: boards.greenhouse.io/<strong>datadog</strong>)</small>
+        <details class="slug-help">
+            <summary>Voir les entreprises disponibles</summary>
+            <div class="slug-lists">
+                <div>
+                    <strong>Greenhouse</strong>
+                    <div class="slug-chips" id="ghChips">
+                        {% for s in ["affirm","airbnb","airtable","algolia","anthropic","asana","brex","cloudflare","cockroachlabs","coinbase","contentful","databricks","datadog","discord","doctolib","dropbox","duolingo","elastic","figma","flexport","gitlab","grammarly","gusto","instacart","intercom","lyft","mirakl","mongodb","netlify","newrelic","okta","pagerduty","pinterest","postman","proton","reddit","robinhood","roku","samsara","squarespace","stripe","toast","twilio","twitch","vercel","waymo"] %}
+                        <button type="button" class="slug-chip" data-slug="{{ s }}">{{ s }}</button>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div>
+                    <strong>Lever</strong>
+                    <div class="slug-chips" id="lvChips">
+                        {% for s in ["blablacar","mistral","palantir","plaid","qonto","spotify","swile"] %}
+                        <button type="button" class="slug-chip" data-slug="{{ s }}">{{ s }}</button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </details>
+    </div>
+
     <div class="form-grid">
         <div class="form-group form-group-wide">
             <label for="keywordInput">Mots-clés</label>
@@ -17,14 +73,19 @@
             <input type="hidden" name="keywords" id="keywordsHidden" value="{{ form.keywords | join(',') }}">
         </div>
 
-        <div class="form-group">
-            <label for="location">Localisation</label>
-            <input type="text" id="location" name="location" placeholder="ex: Paris, Lyon..."
-                   value="{{ form.location }}">
+        <div class="form-group form-group-wide">
+            <label for="locationInput">Localisation</label>
+            <div class="tags-container" id="locationContainer">
+                {% for loc in form.locations %}
+                    <span class="tag tag-location">{{ loc }}<button type="button" class="tag-remove">&times;</button></span>
+                {% endfor %}
+                <input type="text" id="locationInput" placeholder="Tapez une ville puis Entrée...">
+            </div>
+            <input type="hidden" name="locations" id="locationsHidden" value="{{ form.locations | join(',') }}">
         </div>
 
         <div class="form-group">
-            <label for="company">Entreprise</label>
+            <label for="company">Entreprise (WTTJ)</label>
             <input type="text" id="company" name="company" placeholder="ex: Datadog, Google..."
                    value="{{ form.company }}">
         </div>
@@ -77,6 +138,7 @@
     <table>
         <thead>
             <tr>
+                <th>Source</th>
                 <th>Titre</th>
                 <th>Entreprise</th>
                 <th>Lieu</th>
@@ -90,6 +152,7 @@
         <tbody>
             {% for job in results %}
             <tr>
+                <td><span class="source-badge source-{{ job.source | lower | replace(' ', '') }}">{{ job.source }}</span></td>
                 <td><a href="{{ job.url }}" target="_blank">{{ job.title }}</a></td>
                 <td>{{ job.company }}</td>
                 <td>{{ job.location }}</td>
@@ -116,56 +179,89 @@
 {% endif %}
 
 <script>
-/* Tags */
-const container = document.getElementById('tagsContainer');
-const input = document.getElementById('keywordInput');
-const hidden = document.getElementById('keywordsHidden');
+/* Generic tags helper */
+function setupTags(containerId, inputId, hiddenId, tagClass) {
+    const container = document.getElementById(containerId);
+    const input = document.getElementById(inputId);
+    const hidden = document.getElementById(hiddenId);
 
-function updateHidden() {
-    const tags = container.querySelectorAll('.tag');
-    const values = Array.from(tags).map(t => t.firstChild.textContent.trim());
-    hidden.value = values.join(',');
-}
-
-function addTag(text) {
-    text = text.trim();
-    if (!text) return;
-    const existing = Array.from(container.querySelectorAll('.tag')).map(t => t.firstChild.textContent.trim().toLowerCase());
-    if (existing.includes(text.toLowerCase())) return;
-
-    const tag = document.createElement('span');
-    tag.className = 'tag';
-    tag.textContent = text;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'tag-remove';
-    btn.innerHTML = '&times;';
-    btn.addEventListener('click', () => { tag.remove(); updateHidden(); });
-    tag.appendChild(btn);
-    container.insertBefore(tag, input);
-    updateHidden();
-}
-
-input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ',') {
-        e.preventDefault();
-        addTag(input.value.replace(',', ''));
-        input.value = '';
-    }
-    if (e.key === 'Backspace' && !input.value) {
+    function updateHidden() {
         const tags = container.querySelectorAll('.tag');
-        if (tags.length) { tags[tags.length - 1].remove(); updateHidden(); }
+        const values = Array.from(tags).map(t => t.firstChild.textContent.trim());
+        hidden.value = values.join(',');
     }
+
+    function addTag(text) {
+        text = text.trim();
+        if (!text) return;
+        const existing = Array.from(container.querySelectorAll('.tag')).map(t => t.firstChild.textContent.trim().toLowerCase());
+        if (existing.includes(text.toLowerCase())) return;
+
+        const tag = document.createElement('span');
+        tag.className = 'tag' + (tagClass ? ' ' + tagClass : '');
+        tag.textContent = text;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'tag-remove';
+        btn.innerHTML = '&times;';
+        btn.addEventListener('click', () => { tag.remove(); updateHidden(); });
+        tag.appendChild(btn);
+        container.insertBefore(tag, input);
+        updateHidden();
+    }
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            addTag(input.value.replace(',', ''));
+            input.value = '';
+        }
+        if (e.key === 'Backspace' && !input.value) {
+            const tags = container.querySelectorAll('.tag');
+            if (tags.length) { tags[tags.length - 1].remove(); updateHidden(); }
+        }
+    });
+
+    container.addEventListener('click', () => input.focus());
+    container.querySelectorAll('.tag-remove').forEach(btn => {
+        btn.addEventListener('click', () => { btn.parentElement.remove(); updateHidden(); });
+    });
+
+    return { addTag, input };
+}
+
+/* Keywords tags */
+const kwTags = setupTags('tagsContainer', 'keywordInput', 'keywordsHidden', '');
+
+/* Location tags */
+const locTags = setupTags('locationContainer', 'locationInput', 'locationsHidden', 'tag-location');
+
+/* Slugs tags */
+const slugTags = setupTags('slugsContainer', 'slugInput', 'slugsHidden', 'tag-ats');
+
+/* Clickable slug chips */
+document.querySelectorAll('.slug-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+        slugTags.addTag(chip.dataset.slug);
+    });
 });
 
-container.addEventListener('click', () => input.focus());
-
-container.querySelectorAll('.tag-remove').forEach(btn => {
-    btn.addEventListener('click', () => { btn.parentElement.remove(); updateHidden(); });
+/* Show/hide ATS slugs section based on checkboxes */
+function toggleAtsSection() {
+    const gh = document.querySelector('input[value="greenhouse"]').checked;
+    const lv = document.querySelector('input[value="lever"]').checked;
+    document.getElementById('atsSlugsGroup').style.display = (gh || lv) ? 'block' : 'none';
+}
+document.querySelectorAll('input[name="sources"]').forEach(cb => {
+    cb.addEventListener('change', toggleAtsSection);
 });
+toggleAtsSection();
 
+/* Submit: flush pending input into tags */
 document.getElementById('searchForm').addEventListener('submit', () => {
-    if (input.value.trim()) { addTag(input.value); input.value = ''; }
+    if (kwTags.input.value.trim()) { kwTags.addTag(kwTags.input.value); kwTags.input.value = ''; }
+    if (locTags.input.value.trim()) { locTags.addTag(locTags.input.value); locTags.input.value = ''; }
+    if (slugTags.input.value.trim()) { slugTags.addTag(slugTags.input.value); slugTags.input.value = ''; }
 });
 
 /* Save buttons */

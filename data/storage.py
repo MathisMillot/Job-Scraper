@@ -24,19 +24,27 @@ class JobStorage:
                 published_at TEXT,
                 contract_type TEXT,
                 remote TEXT,
-                salary TEXT
+                salary TEXT,
+                source TEXT DEFAULT 'WTTJ'
             )
         """)
         self._conn.commit()
+        # Migration : ajouter la colonne source si elle n'existe pas
+        try:
+            self._conn.execute("ALTER TABLE jobs ADD COLUMN source TEXT DEFAULT 'WTTJ'")
+            self._conn.commit()
+        except sqlite3.OperationalError:
+            pass  # colonne existe déjà
 
     def save_one(self, job_data: dict) -> bool:
         """Sauvegarde une seule offre. Retourne True si nouveau, False si doublon."""
         try:
             self._conn.execute(
-                "INSERT INTO jobs (url, title, company, location, published_at, contract_type, remote, salary) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO jobs (url, title, company, location, published_at, contract_type, remote, salary, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (job_data["url"], job_data["title"], job_data["company"], job_data["location"],
-                 job_data["published_at"], job_data["contract_type"], job_data["remote"], job_data.get("salary")),
+                 job_data["published_at"], job_data["contract_type"], job_data["remote"],
+                 job_data.get("salary"), job_data.get("source", "WTTJ")),
             )
             self._conn.commit()
             return True

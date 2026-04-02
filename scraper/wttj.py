@@ -26,6 +26,7 @@ class Job:
     contract_type: str
     remote: str
     salary: str | None = None
+    source: str = "WTTJ"
 
     def to_dict(self) -> dict:
         return asdict(self)
