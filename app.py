@@ -134,10 +134,10 @@ def index():
             "temporary": ["temporary", "temp", "cdd"],
         }
         if form["contract_type"]:
+            # Contract type : appliqué à WTTJ, Lever et Greenhouse (inféré depuis le titre pour GH)
             ct = form["contract_type"].lower()
             aliases = CONTRACT_ALIASES.get(ct, [ct])
-            jobs = [j for j in jobs if j.source == "WTTJ" or
-                    any(a in j.contract_type.lower() for a in aliases)]
+            jobs = [j for j in jobs if j.contract_type and any(a in j.contract_type.lower() for a in aliases)]
         if form["remote"]:
             rm = form["remote"].lower()
             jobs = [j for j in jobs if j.source == "WTTJ" or rm in j.remote.lower()]

@@ -61,6 +61,11 @@ class GreenhouseScraper:
                 contract_type = meta.get("value") or ""
                 break
 
+        # Si pas de metadata, inférer depuis le titre/description
+        if not contract_type:
+            title_lower = hit.get("title", "").lower()
+            contract_type = self._infer_contract_type(title_lower)
+
         return Job(
             title=hit.get("title", ""),
             company=hit.get("company_name", slug),
@@ -73,6 +78,19 @@ class GreenhouseScraper:
             source="Greenhouse",
         )
 
+    def _infer_contract_type(self, text: str) -> str:
+        """Inférer le type de contrat depuis le titre/description."""
+        text = text.lower()
+        if any(w in text for w in ["intern", "stage", "apprenti"]):
+            return "Internship"
+        if any(w in text for w in ["contract", "temporary", "temp", "cdd"]):
+            return "Contract"
+        if any(w in text for w in ["freelance", "consultant"]):
+            return "Freelance"
+        if any(w in text for w in ["part-time", "part time", "parttime"]):
+            return "Part-time"
+        return ""
+
     def _filter(
         self,
         jobs: list[Job],
@@ -80,6 +98,8 @@ class GreenhouseScraper:
         location: str | None,
     ) -> list[Job]:
         """Filtre les offres localement par mots-clés (OR) et localisation."""
+        import re
+
         filtered = jobs
 
         if location:
@@ -88,9 +108,14 @@ class GreenhouseScraper:
 
         if keywords:
             kw_lower = [k.lower() for k in keywords]
+            # Chercher des mots entiers (séparés par espaces), pas des sous-chaînes
             filtered = [
                 j for j in filtered
-                if any(kw in j.title.lower() or kw in j.company.lower() for kw in kw_lower)
+                if any(
+                    re.search(r'\b' + re.escape(kw) + r'\b', j.title.lower()) or
+                    re.search(r'\b' + re.escape(kw) + r'\b', j.company.lower())
+                    for kw in kw_lower
+                )
             ]
 
         return filtered
