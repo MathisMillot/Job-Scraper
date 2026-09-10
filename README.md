@@ -1,6 +1,7 @@
 # Job Scraper
 
 Moteur de recherche d'offres d'emploi avec interface web Flask et architecture extensible pour plusieurs sources.
+Accessible ici pour consultation : https://landr-behnayfnauebgnhs.swedencentral-01.azurewebsites.net/saved
 
 ## Fonctionnalités
 
