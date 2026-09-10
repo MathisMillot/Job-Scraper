@@ -178,6 +178,20 @@
 </section>
 {% endif %}
 
+<!-- Popup de saisie de label lors de la sauvegarde -->
+<div class="modal-overlay" id="labelModal" hidden>
+    <div class="modal">
+        <h3>Ajouter un label</h3>
+        <p>Choisissez un label existant ou créez-en un nouveau avant de sauvegarder.</p>
+        <div class="slug-chips" id="existingLabelsChips"></div>
+        <input type="text" id="labelInput" placeholder="ex: à postuler, favori...">
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="labelCancelBtn">Annuler</button>
+            <button type="button" class="btn" id="labelConfirmBtn">Sauvegarder</button>
+        </div>
+    </div>
+</div>
+
 <script>
 /* Generic tags helper */
 function setupTags(containerId, inputId, hiddenId, tagClass) {
@@ -265,21 +279,87 @@ document.getElementById('searchForm').addEventListener('submit', () => {
 });
 
 /* Save buttons */
-document.querySelectorAll('.btn-save:not(.saved)').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const job = JSON.parse(btn.dataset.job);
-        fetch('/save', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(job),
-        })
+const labelModal = document.getElementById('labelModal');
+const labelInput = document.getElementById('labelInput');
+const labelCancelBtn = document.getElementById('labelCancelBtn');
+const labelConfirmBtn = document.getElementById('labelConfirmBtn');
+const existingLabelsChips = document.getElementById('existingLabelsChips');
+let pendingSaveBtn = null;
+
+function loadExistingLabels() {
+    fetch('/labels')
         .then(r => r.json())
-        .then(data => {
-            btn.textContent = 'Sauvegardé';
-            btn.classList.add('saved');
-            btn.disabled = true;
-        });
+        .then(existingLabels => {
+            existingLabelsChips.innerHTML = '';
+            existingLabels.forEach(label => {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'slug-chip';
+                chip.textContent = label;
+                chip.addEventListener('click', () => { labelInput.value = label; labelInput.focus(); });
+                existingLabelsChips.appendChild(chip);
+            });
+        })
+        .catch(() => {});
+}
+
+function openLabelModal(btn) {
+    pendingSaveBtn = btn;
+    labelInput.value = '';
+    labelModal.hidden = false;
+    labelInput.focus();
+    loadExistingLabels();
+}
+
+function closeLabelModal() {
+    labelModal.hidden = true;
+    pendingSaveBtn = null;
+}
+
+function submitSave(btn, label) {
+    const job = JSON.parse(btn.dataset.job);
+    if (label) job.label = label;
+
+    fetch('/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(job),
+    })
+    .then(r => r.json())
+    .then(data => {
+        btn.textContent = 'Sauvegardé';
+        btn.classList.add('saved');
+        btn.disabled = true;
     });
+}
+
+document.querySelectorAll('.btn-save:not(.saved)').forEach(btn => {
+    btn.addEventListener('click', () => openLabelModal(btn));
 });
+
+labelCancelBtn.addEventListener('click', () => {
+    if (pendingSaveBtn) submitSave(pendingSaveBtn, '');
+    closeLabelModal();
+});
+
+labelConfirmBtn.addEventListener('click', () => {
+    if (pendingSaveBtn) submitSave(pendingSaveBtn, labelInput.value.trim());
+    closeLabelModal();
+});
+
+labelInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        labelConfirmBtn.click();
+    }
+});
+
+labelModal.addEventListener('click', (e) => {
+    if (e.target === labelModal) {
+        if (pendingSaveBtn) submitSave(pendingSaveBtn, '');
+        closeLabelModal();
+    }
+});
+
 </script>
 {% endblock %}

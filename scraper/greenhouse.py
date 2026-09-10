@@ -1,6 +1,9 @@
 """Scraper pour les entreprises utilisant Greenhouse comme ATS."""
+import logging
 import requests
 from scraper.wttj import Job
+
+logger = logging.getLogger(__name__)
 
 
 GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
@@ -29,7 +32,8 @@ class GreenhouseScraper:
             try:
                 jobs = self._fetch_company(slug)
                 all_jobs.extend(jobs)
-            except requests.RequestException:
+            except requests.RequestException as e:
+                logger.warning("Greenhouse: échec de récupération pour '%s': %s", slug, e)
                 continue
 
         if keywords or location:

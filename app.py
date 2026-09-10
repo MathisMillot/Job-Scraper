@@ -2,6 +2,12 @@
 import os
 from pathlib import Path
 
+# Utilise le magasin de certificats du système (Windows/macOS) au lieu de celui
+# de certifi : nécessaire derrière un proxy réseau d'entreprise qui interceptent le TLS
+# avec leur propre autorité de certification (sinon SSLError CERTIFICATE_VERIFY_FAILED).
+import truststore
+truststore.inject_into_ssl()
+
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from scraper.wttj import WTTJScraper, CONTRACT_TYPES, REMOTE_OPTIONS
 from scraper.greenhouse import GreenhouseScraper
@@ -169,8 +175,17 @@ def save_job():
     if not job_data or not job_data.get("url"):
         return jsonify({"error": "Données manquantes"}), 400
 
+    label = (job_data.get("label") or "").strip()
     saved = storage.save_one(job_data)
+    if label:
+        storage.add_label(job_data["url"], label)
     return jsonify({"saved": saved})
+
+
+@app.route("/labels")
+def labels():
+    """Retourne les labels existants (appelé en AJAX pour la pop-up de sauvegarde)."""
+    return jsonify(storage.all_labels())
 
 
 @app.route("/delete", methods=["POST"])
@@ -186,6 +201,8 @@ def delete_job():
 @app.route("/saved")
 def saved():
     jobs = storage.all(order_by="published_at DESC")
+    for job in jobs:
+        job["labels"] = storage.labels_for_job(job["url"])
     return render_template("saved.html", jobs=jobs, count=len(jobs))
 
 

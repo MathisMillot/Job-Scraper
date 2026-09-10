@@ -15,7 +15,8 @@ class JobStorage:
         self._create_table()
 
     def _create_table(self):
-        self._conn.execute("""
+        # executescript exécute bien les 3 instructions (execute() ignore tout sauf la première)
+        self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS jobs (
                 url TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -26,8 +27,22 @@ class JobStorage:
                 remote TEXT,
                 salary TEXT,
                 source TEXT DEFAULT 'WTTJ'
-            )
+            );
+
+            CREATE TABLE IF NOT EXISTS labels(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS job_label(
+                job_url TEXT NOT NULL,
+                label_id INTEGER NOT NULL,
+                PRIMARY KEY (job_url, label_id),
+                FOREIGN KEY (job_url) REFERENCES jobs(url),
+                FOREIGN KEY (label_id) REFERENCES labels(id)
+            );
         """)
+
         self._conn.commit()
         # Migration : ajouter la colonne source si elle n'existe pas
         try:
@@ -50,6 +65,35 @@ class JobStorage:
             return True
         except sqlite3.IntegrityError:
             return False
+
+    def add_label(self, job_url: str, label: str) -> None:
+        """Associe un label à une offre (crée le label s'il n'existe pas déjà)."""
+        label = label.strip()
+        if not label:
+            return
+        self._conn.execute("INSERT OR IGNORE INTO labels (label) VALUES (?)", (label,))
+        cursor = self._conn.execute("SELECT id FROM labels WHERE label = ?", (label,))
+        label_id = cursor.fetchone()["id"]
+        self._conn.execute(
+            "INSERT OR IGNORE INTO job_label (job_url, label_id) VALUES (?, ?)",
+            (job_url, label_id),
+        )
+        self._conn.commit()
+
+    def labels_for_job(self, job_url: str) -> list[str]:
+        """Retourne les labels associés à une offre."""
+        cursor = self._conn.execute(
+            "SELECT l.label FROM labels l "
+            "JOIN job_label jl ON jl.label_id = l.id "
+            "WHERE jl.job_url = ?",
+            (job_url,),
+        )
+        return [row["label"] for row in cursor.fetchall()]
+
+    def all_labels(self) -> list[str]:
+        """Retourne tous les labels existants, triés alphabétiquement."""
+        cursor = self._conn.execute("SELECT label FROM labels ORDER BY label COLLATE NOCASE")
+        return [row["label"] for row in cursor.fetchall()]
 
     def delete_one(self, url: str) -> bool:
         """Supprime une offre par URL. Retourne True si supprimée."""
