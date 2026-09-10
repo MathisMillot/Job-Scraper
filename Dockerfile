@@ -46,7 +46,14 @@ COPY data ./data
 COPY scraper ./scraper
 COPY web ./web
 
-RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+# Packaging tools are not needed by the runtime image.
+RUN site_packages="$(python -c 'import site; print(site.getsitepackages()[0])')" \
+    && find "$site_packages" -maxdepth 1 \
+        \( -name "pip" -o -name "pip-*.dist-info" \
+        -o -name "setuptools" -o -name "setuptools-*.dist-info" \) \
+        -exec rm -rf {} + \
+    && find /usr/local/bin -maxdepth 1 -type f -name "pip*" -delete \
+    && useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /home/appuser \
     && chown -R appuser:appuser /app /home
 
