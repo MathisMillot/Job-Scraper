@@ -1,17 +1,18 @@
-"""Classe abstraite pour tous les scrapers."""
-from abc import ABC, abstractmethod
+"""Protocols shared by company ATS scrapers."""
+
+from typing import Protocol
+
 from scraper.wttj import Job
 
 
-class BaseScraper(ABC):
-    """Interface commune pour les scrapers d'offres d'emploi."""
+class CompanyScraper(Protocol):
+    """Interface implemented by Greenhouse and Lever scrapers."""
 
-    @abstractmethod
     def search(
         self,
+        company_slugs: list[str],
         keywords: list[str] | None = None,
         location: str | None = None,
-        company: str | None = None,
     ) -> list[Job]:
-        """Recherche des offres et retourne une liste de Job."""
+        """Return matching jobs for the supplied company slugs."""
         ...
