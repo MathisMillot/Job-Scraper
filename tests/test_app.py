@@ -62,6 +62,41 @@ def test_get_index_and_health(app_client):
     assert health.get_json() == {"status": "ok"}
 
 
+def test_search_form_submits_with_csrf_token(settings, tmp_path, jobs):
+    storage = JobStorage(tmp_path / "csrf-search.db")
+    app = create_app(
+        settings,
+        config={
+            "TESTING": True,
+            "WTF_CSRF_ENABLED": True,
+            "WTF_CSRF_CHECK_DEFAULT": True,
+            "TRUSTSTORE_ENABLED": False,
+        },
+        storage_instance=storage,
+        wttj_scraper_instance=FakeWTTJScraper([jobs[0]]),
+        greenhouse_scraper_instance=FakeCompanyScraper([]),
+        lever_scraper_instance=FakeCompanyScraper([]),
+    )
+    with app.test_client() as client:
+        page = client.get("/")
+        token = re.search(
+            br'<input type="hidden" name="csrf_token" value="([^"]+)"',
+            page.data,
+        ).group(1).decode()
+        response = client.post(
+            "/",
+            data={
+                "csrf_token": token,
+                "sources": "wttj",
+                "keywords": "python",
+            },
+        )
+    storage.close()
+
+    assert response.status_code == 200
+    assert b"WTTJ" in response.data
+
+
 def test_empty_search_does_not_call_scrapers(app_client):
     _, client, _, wttj, _, _ = app_client
 
