@@ -5,6 +5,8 @@
 <h1>Rechercher des offres d'emploi</h1>
 
 <form method="POST" class="search-form" id="searchForm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
     <!-- Sources -->
     <div class="sources-section">
         <label class="section-label">Sources</label>
