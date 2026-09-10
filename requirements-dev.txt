@@ -8,5 +8,5 @@ pytest==9.0.3
 pytest-cov==6.2.1
 pytest-playwright==0.9.0
 responses==0.25.7
-ruff==0.12.5
+ruff==0.16.6
 types-requests==2.32.4.20250809
