@@ -1,19 +1,28 @@
+import os
 import time
+from dataclasses import asdict, dataclass
+
 import requests
-from dataclasses import dataclass, asdict
 
+DEFAULT_INDEX_NAME = "wttj_jobs_production_fr"
+DEFAULT_BASE_URL = "https://www.welcometothejungle.com/fr/companies"
 
-ALGOLIA_APP_ID = "CSEKHVMS53"
-ALGOLIA_API_KEY = "4bd8f6215d0cc52b26430765769e65a0"
-INDEX_NAME = "wttj_jobs_production_fr"
-ALGOLIA_QUERY_URL = f"https://{ALGOLIA_APP_ID}-dsn.algolia.net/1/indexes/{INDEX_NAME}/query"
-ALGOLIA_MULTI_URL = f"https://{ALGOLIA_APP_ID}-dsn.algolia.net/1/indexes/*/queries"
-
-WTTJ_BASE_URL = "https://www.welcometothejungle.com/fr/companies"
-
-# Valeurs acceptées par l'API
-CONTRACT_TYPES = ["full_time", "part_time", "internship", "apprenticeship", "freelance", "temporary", "vie", "graduate_program"]
+# Values accepted by the WTTJ API.
+CONTRACT_TYPES = [
+    "full_time",
+    "part_time",
+    "internship",
+    "apprenticeship",
+    "freelance",
+    "temporary",
+    "vie",
+    "graduate_program",
+]
 REMOTE_OPTIONS = ["no", "punctual", "partial", "fulltime"]
+
+
+class WTTJConfigurationError(RuntimeError):
+    """Raised when a WTTJ request cannot be configured safely."""
 
 
 @dataclass
@@ -33,18 +42,57 @@ class Job:
 
 
 class WTTJScraper:
-    """Scraper pour Welcome to the Jungle via l'API Algolia."""
+    """Scraper for Welcome to the Jungle through the Algolia API."""
 
-    def __init__(self, hits_per_page: int = 20, delay: float = 0.5):
+    def __init__(
+        self,
+        hits_per_page: int = 20,
+        delay: float = 0.5,
+        *,
+        app_id: str | None = None,
+        api_key: str | None = None,
+        index_name: str | None = None,
+        timeout: tuple[float, float] = (10.0, 30.0),
+        base_url: str = DEFAULT_BASE_URL,
+    ):
         self.hits_per_page = hits_per_page
         self.delay = delay
+        self.app_id = (app_id if app_id is not None else os.getenv("WTTJ_APP_ID", "")).strip()
+        self.api_key = (
+            api_key if api_key is not None else os.getenv("WTTJ_API_KEY", "")
+        ).strip()
+        self.index_name = (
+            index_name
+            if index_name is not None
+            else os.getenv("WTTJ_INDEX_NAME", DEFAULT_INDEX_NAME)
+        ).strip()
+        self.timeout = timeout
+        self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
-        self.session.headers.update({
-            "X-Algolia-Application-Id": ALGOLIA_APP_ID,
-            "X-Algolia-API-Key": ALGOLIA_API_KEY,
-            "Referer": "https://www.welcometothejungle.com/",
-            "Content-Type": "application/json",
-        })
+        self.session.headers.update(
+            {
+                "Referer": "https://www.welcometothejungle.com/",
+                "Content-Type": "application/json",
+            }
+        )
+        if self.app_id:
+            self.session.headers["X-Algolia-Application-Id"] = self.app_id
+        if self.api_key:
+            self.session.headers["X-Algolia-API-Key"] = self.api_key
+
+    @property
+    def query_url(self) -> str:
+        return f"https://{self.app_id}-dsn.algolia.net/1/indexes/{self.index_name}/query"
+
+    @property
+    def multi_query_url(self) -> str:
+        return f"https://{self.app_id}-dsn.algolia.net/1/indexes/*/queries"
+
+    def _ensure_configured(self) -> None:
+        if not self.app_id or not self.api_key:
+            raise WTTJConfigurationError(
+                "WTTJ_APP_ID and WTTJ_API_KEY must be configured before searching"
+            )
 
     def _build_facet_filters(
         self,
@@ -53,8 +101,8 @@ class WTTJScraper:
         company: str | None = None,
         location: str | None = None,
     ) -> list:
-        """Construit la liste de facet filters pour Algolia."""
-        facet_filters = []
+        """Build Algolia facet filters."""
+        facet_filters: list[str | list[str]] = []
         if contract_type:
             if isinstance(contract_type, str):
                 facet_filters.append(f"contract_type:{contract_type}")
@@ -77,14 +125,12 @@ class WTTJScraper:
         location: str | None = None,
         page: int = 0,
     ) -> tuple[list[Job], int]:
-        """Recherche des offres d'emploi (une seule query).
-
-        Returns:
-            Tuple (liste de jobs, nombre total de pages)
-        """
-        facet_filters = self._build_facet_filters(contract_type, remote, company, location)
-
-        payload = {
+        """Search jobs with one Algolia query."""
+        self._ensure_configured()
+        facet_filters = self._build_facet_filters(
+            contract_type, remote, company, location
+        )
+        payload: dict[str, object] = {
             "query": query,
             "hitsPerPage": self.hits_per_page,
             "page": page,
@@ -92,15 +138,16 @@ class WTTJScraper:
         if facet_filters:
             payload["facetFilters"] = facet_filters
 
-        resp = self.session.post(ALGOLIA_QUERY_URL, json=payload)
-        resp.raise_for_status()
-        result = resp.json()
-
+        response = self.session.post(
+            self.query_url,
+            json=payload,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        result = response.json()
         hits = result["hits"]
         nb_pages = result["nbPages"]
-
-        jobs = [self._parse_hit(hit) for hit in hits]
-        return jobs, nb_pages
+        return [self._parse_hit(hit) for hit in hits], nb_pages
 
     def search_multi_keywords(
         self,
@@ -111,44 +158,52 @@ class WTTJScraper:
         location: str | None = None,
         max_pages: int = 3,
     ) -> list[Job]:
-        """Recherche OR sur plusieurs mots-clés.
-
-        Lance une requête par mot-clé via l'API multi-query d'Algolia,
-        puis fusionne et déduplique les résultats par URL.
-        """
+        """Search multiple keywords with OR semantics and URL deduplication."""
+        self._ensure_configured()
         if not keywords:
             return self.search_all_pages(
-                query="", contract_type=contract_type, remote=remote,
-                company=company, location=location, max_pages=max_pages,
+                query="",
+                contract_type=contract_type,
+                remote=remote,
+                company=company,
+                location=location,
+                max_pages=max_pages,
             )
-
         if len(keywords) == 1:
             return self.search_all_pages(
-                query=keywords[0], contract_type=contract_type, remote=remote,
-                company=company, location=location, max_pages=max_pages,
+                query=keywords[0],
+                contract_type=contract_type,
+                remote=remote,
+                company=company,
+                location=location,
+                max_pages=max_pages,
             )
 
-        # Plusieurs mots-clés : une requête par keyword, fusionnées en OR
         seen_urls: set[str] = set()
         all_jobs: list[Job] = []
-
         for page in range(max_pages):
-            facet_filters = self._build_facet_filters(contract_type, remote, company, location)
-            requests_list = []
-            for kw in keywords:
-                req = {
-                    "indexName": INDEX_NAME,
-                    "query": kw,
+            facet_filters = self._build_facet_filters(
+                contract_type, remote, company, location
+            )
+            requests_list: list[dict[str, object]] = []
+            for keyword in keywords:
+                request_payload: dict[str, object] = {
+                    "indexName": self.index_name,
+                    "query": keyword,
                     "hitsPerPage": self.hits_per_page,
                     "page": page,
                 }
                 if facet_filters:
-                    req["facetFilters"] = facet_filters
-                requests_list.append(req)
+                    request_payload["facetFilters"] = facet_filters
+                requests_list.append(request_payload)
 
-            resp = self.session.post(ALGOLIA_MULTI_URL, json={"requests": requests_list})
-            resp.raise_for_status()
-            data = resp.json()
+            response = self.session.post(
+                self.multi_query_url,
+                json={"requests": requests_list},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
 
             page_has_results = False
             for result in data["results"]:
@@ -162,8 +217,8 @@ class WTTJScraper:
 
             if not page_has_results:
                 break
-
-            time.sleep(self.delay)
+            if page + 1 < max_pages:
+                time.sleep(self.delay)
 
         return all_jobs
 
@@ -176,9 +231,8 @@ class WTTJScraper:
         location: str | None = None,
         max_pages: int = 5,
     ) -> list[Job]:
-        """Recherche sur plusieurs pages avec délai entre chaque requête."""
+        """Search multiple pages with a delay between requests."""
         all_jobs = []
-
         for page in range(max_pages):
             jobs, nb_pages = self.search(
                 query=query,
@@ -189,54 +243,52 @@ class WTTJScraper:
                 page=page,
             )
             all_jobs.extend(jobs)
-
             if page + 1 >= nb_pages:
                 break
-
             time.sleep(self.delay)
-
         return all_jobs
 
     def _parse_hit(self, hit: dict) -> Job:
-        """Transforme un résultat Algolia en objet Job."""
-        org = hit.get("organization", {})
-        offices = hit.get("offices", [])
-        location = offices[0].get("city", "Non précisé") if offices else "Non précisé"
+        """Transform one Algolia result into a Job."""
+        organization = hit.get("organization") or {}
+        offices = hit.get("offices") or []
+        first_office = offices[0] if offices and isinstance(offices[0], dict) else {}
+        location = first_office.get("city", "Non précisé") or "Non précisé"
 
-        # Construction du lien
-        org_slug = org.get("slug", "")
+        organization_slug = organization.get("slug", "")
         job_slug = hit.get("slug", "")
-        url = f"{WTTJ_BASE_URL}/{org_slug}/jobs/{job_slug}"
-
-        # Salaire
-        salary = self._format_salary(hit)
+        url = f"{self.base_url}/{organization_slug}/jobs/{job_slug}"
 
         return Job(
-            title=hit.get("name", ""),
-            company=org.get("name", ""),
+            title=hit.get("name", "") or "",
+            company=organization.get("name", "") or "",
             location=location,
             url=url,
-            published_at=hit.get("published_at", ""),
-            contract_type=hit.get("contract_type", ""),
-            remote=hit.get("remote", ""),
-            salary=salary,
+            published_at=hit.get("published_at", "") or "",
+            contract_type=hit.get("contract_type", "") or "",
+            remote=hit.get("remote", "") or "",
+            salary=self._format_salary(hit),
+            source="WTTJ",
         )
 
     def _format_salary(self, hit: dict) -> str | None:
-        """Formate le salaire à partir des données Algolia."""
-        sal_min = hit.get("salary_minimum")
-        sal_max = hit.get("salary_maximum")
+        """Format salary data from Algolia."""
+        salary_minimum = hit.get("salary_minimum")
+        salary_maximum = hit.get("salary_maximum")
         currency = hit.get("salary_currency", "EUR")
         period = hit.get("salary_period", "yearly")
 
-        if not sal_min and not sal_max:
+        if salary_minimum is None and salary_maximum is None:
             return None
 
-        period_label = {"yearly": "/an", "monthly": "/mois", "daily": "/jour"}.get(period, "")
+        period_label = {
+            "yearly": "/an",
+            "monthly": "/mois",
+            "daily": "/jour",
+        }.get(period, "")
 
-        if sal_min and sal_max:
-            return f"{sal_min}-{sal_max} {currency}{period_label}"
-        elif sal_min:
-            return f"{sal_min}+ {currency}{period_label}"
-        else:
-            return f"≤{sal_max} {currency}{period_label}"
+        if salary_minimum is not None and salary_maximum is not None:
+            return f"{salary_minimum}-{salary_maximum} {currency}{period_label}"
+        if salary_minimum is not None:
+            return f"{salary_minimum}+ {currency}{period_label}"
+        return f"≤{salary_maximum} {currency}{period_label}"

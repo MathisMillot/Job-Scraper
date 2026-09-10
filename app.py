@@ -1,42 +1,79 @@
-"""Point d'entrée pour Azure App Service et développement local."""
-import os
-from pathlib import Path
+"""Flask application entry point for local development and Azure App Service."""
 
-# Utilise le magasin de certificats du système (Windows/macOS) au lieu de celui
-# de certifi : nécessaire derrière un proxy réseau d'entreprise qui interceptent le TLS
-# avec leur propre autorité de certification (sinon SSLError CERTIFICATE_VERIFY_FAILED).
+import logging
+import re
+import sqlite3
+from collections.abc import Mapping
+from typing import Any
+
+import requests
 import truststore
-truststore.inject_into_ssl()
+from flask import (
+    Flask,
+    current_app,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
+from flask_wtf.csrf import CSRFError, CSRFProtect
 
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
-from scraper.wttj import WTTJScraper, CONTRACT_TYPES, REMOTE_OPTIONS
+from config import VALID_SOURCE_KEYS, Settings
+from data.storage import InvalidJobData, JobStorage
 from scraper.greenhouse import GreenhouseScraper
 from scraper.lever import LeverScraper
-from data.storage import JobStorage
-
-# Sur Azure Linux, /home est le seul dossier persistant
-if os.environ.get("WEBSITE_SITE_NAME"):
-    db_path = Path("/home/jobs.db")
-else:
-    db_path = Path(__file__).parent / "data" / "jobs.db"
-
-app = Flask(
-    __name__,
-    template_folder="web/templates",
-    static_folder="web/static",
+from scraper.wttj import (
+    CONTRACT_TYPES,
+    REMOTE_OPTIONS,
+    WTTJConfigurationError,
+    WTTJScraper,
 )
-app.secret_key = os.environ.get("SECRET_KEY", "job-scraper-dev-key")
 
-wttj_scraper = WTTJScraper(hits_per_page=20)
-greenhouse_scraper = GreenhouseScraper()
-lever_scraper = LeverScraper()
-storage = JobStorage(db_path=db_path)
+logger = logging.getLogger(__name__)
+csrf = CSRFProtect()
+
+CONTRACT_ALIASES = {
+    "internship": ["internship", "intern", "stage"],
+    "full_time": ["full_time", "full-time", "full time", "fulltime", "cdi"],
+    "part_time": ["part_time", "part-time", "part time", "parttime"],
+    "apprenticeship": [
+        "apprenticeship",
+        "apprentice",
+        "alternance",
+    ],
+    "freelance": ["freelance", "contractor", "contract"],
+    "temporary": ["temporary", "temp", "cdd"],
+}
+SALARY_RANGES: dict[str, tuple[float, float | None]] = {
+    "0-25k": (0, 25_000),
+    "25k-35k": (25_000, 35_000),
+    "35k-45k": (35_000, 45_000),
+    "45k-60k": (45_000, 60_000),
+    "60k+": (60_000, None),
+}
+SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$")
 
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    results = None
-    form = {
+def _storage() -> JobStorage:
+    return current_app.extensions["job_storage"]
+
+
+def _wttj_scraper() -> WTTJScraper:
+    return current_app.extensions["wttj_scraper"]
+
+
+def _greenhouse_scraper() -> GreenhouseScraper:
+    return current_app.extensions["greenhouse_scraper"]
+
+
+def _lever_scraper() -> LeverScraper:
+    return current_app.extensions["lever_scraper"]
+
+
+def _default_form() -> dict[str, Any]:
+    return {
         "keywords": [],
         "locations": [],
         "company": "",
@@ -47,197 +84,364 @@ def index():
         "company_slugs": [],
     }
 
+
+def _render_index(
+    *,
+    form: dict[str, Any],
+    results: list[dict[str, Any]] | None = None,
+):
+    return render_template(
+        "index.html",
+        results=results,
+        form=form,
+        contract_types=CONTRACT_TYPES,
+        remote_options=REMOTE_OPTIONS,
+    )
+
+
+def _csv_values(value: str, *, lowercase: bool = False) -> list[str]:
+    values = [item.strip() for item in value.split(",") if item.strip()]
+    if lowercase:
+        return [item.lower() for item in values]
+    return values
+
+
+def _validate_search_form(form: dict[str, Any]) -> list[str]:
+    errors = []
+    invalid_sources = set(form["sources"]) - VALID_SOURCE_KEYS
+    if invalid_sources:
+        errors.append("Une source de recherche est invalide.")
+    if form["contract_type"] and form["contract_type"] not in CONTRACT_TYPES:
+        errors.append("Le type de contrat est invalide.")
+    if form["remote"] and form["remote"] not in REMOTE_OPTIONS:
+        errors.append("Le filtre remote est invalide.")
+    if form["salary_range"] and form["salary_range"] not in SALARY_RANGES:
+        errors.append("La tranche salariale est invalide.")
+    if len(form["company"]) > 200:
+        errors.append("Le nom de l'entreprise est trop long.")
+    if len(form["keywords"]) > 20 or any(
+        len(keyword) > 100 for keyword in form["keywords"]
+    ):
+        errors.append("Les mots-clés sont trop nombreux ou trop longs.")
+    if len(form["locations"]) > 20 or any(
+        len(location) > 100 for location in form["locations"]
+    ):
+        errors.append("Les localisations sont trop nombreuses ou trop longues.")
+    if len(form["company_slugs"]) > 50 or any(
+        not SLUG_PATTERN.fullmatch(slug) for slug in form["company_slugs"]
+    ):
+        errors.append("Un slug d'entreprise est invalide.")
+    return errors
+
+
+def index():
+    form = _default_form()
+    results = None
+
     if request.method == "POST":
-        keywords_raw = request.form.get("keywords", "").strip()
-        form["keywords"] = [k.strip() for k in keywords_raw.split(",") if k.strip()] if keywords_raw else []
-        locations_raw = request.form.get("locations", "").strip()
-        form["locations"] = [l.strip() for l in locations_raw.split(",") if l.strip()] if locations_raw else []
+        submitted_sources = list(dict.fromkeys(request.form.getlist("sources")))
+        form["sources"] = submitted_sources or ["wttj"]
+        form["keywords"] = _csv_values(request.form.get("keywords", ""))
+        form["locations"] = _csv_values(request.form.get("locations", ""))
         form["company"] = request.form.get("company", "").strip()
-        form["contract_type"] = request.form.get("contract_type", "")
-        form["remote"] = request.form.get("remote", "")
-        form["salary_range"] = request.form.get("salary_range", "")
-        form["sources"] = request.form.getlist("sources") or ["wttj"]
-        slugs_raw = request.form.get("company_slugs", "").strip()
-        form["company_slugs"] = [s.strip().lower() for s in slugs_raw.split(",") if s.strip()] if slugs_raw else []
+        form["contract_type"] = request.form.get("contract_type", "").strip()
+        form["remote"] = request.form.get("remote", "").strip()
+        form["salary_range"] = request.form.get("salary_range", "").strip()
+        form["company_slugs"] = _csv_values(
+            request.form.get("company_slugs", ""),
+            lowercase=True,
+        )
 
-        # Greenhouse/Lever nécessitent au moins un slug d'entreprise
-        ats_selected = any(s in form["sources"] for s in ("greenhouse", "lever"))
-        has_wttj = "wttj" in form["sources"]
+        validation_errors = _validate_search_form(form)
+        if validation_errors:
+            for error in validation_errors:
+                flash(error, "error")
+            return _render_index(form=form)
 
-        if not any([form["keywords"], form["locations"], form["company"],
-                     form["contract_type"], form["remote"], form["salary_range"],
-                     form["company_slugs"]]):
+        if not any(
+            [
+                form["keywords"],
+                form["locations"],
+                form["company"],
+                form["contract_type"],
+                form["remote"],
+                form["salary_range"],
+                form["company_slugs"],
+            ]
+        ):
             flash("Veuillez remplir au moins un champ de recherche.", "error")
-            return render_template("index.html", form=form,
-                                   contract_types=CONTRACT_TYPES,
-                                   remote_options=REMOTE_OPTIONS)
+            return _render_index(form=form)
 
+        ats_selected = any(
+            source in form["sources"] for source in ("greenhouse", "lever")
+        )
         if ats_selected and not form["company_slugs"]:
-            flash("Veuillez entrer au moins un slug d'entreprise pour Greenhouse/Lever.", "error")
-            return render_template("index.html", form=form,
-                                   contract_types=CONTRACT_TYPES,
-                                   remote_options=REMOTE_OPTIONS)
+            flash(
+                "Veuillez entrer au moins un slug d'entreprise pour Greenhouse/Lever.",
+                "error",
+            )
+            return _render_index(form=form)
 
         jobs = []
         locations = form["locations"] or [None]
         seen_urls: set[str] = set()
+        try:
+            if "wttj" in form["sources"]:
+                for location in locations:
+                    wttj_jobs = _wttj_scraper().search_multi_keywords(
+                        keywords=form["keywords"],
+                        contract_type=form["contract_type"] or None,
+                        remote=form["remote"] or None,
+                        company=form["company"] or None,
+                        location=location,
+                        max_pages=3,
+                    )
+                    for job in wttj_jobs:
+                        if job.url not in seen_urls:
+                            seen_urls.add(job.url)
+                            jobs.append(job)
 
-        # WTTJ : une requête par localisation, dédupliquées
-        if has_wttj:
-            for loc in locations:
-                wttj_jobs = wttj_scraper.search_multi_keywords(
-                    keywords=form["keywords"],
-                    contract_type=form["contract_type"] or None,
-                    remote=form["remote"] or None,
-                    company=form["company"] or None,
-                    location=loc,
-                    max_pages=3,
+            if "greenhouse" in form["sources"] and form["company_slugs"]:
+                greenhouse_jobs = _greenhouse_scraper().search(
+                    company_slugs=form["company_slugs"],
+                    keywords=form["keywords"] or None,
+                    location=None,
                 )
-                for j in wttj_jobs:
-                    if j.url not in seen_urls:
-                        seen_urls.add(j.url)
-                        jobs.append(j)
+                if form["locations"]:
+                    locations_lower = [location.lower() for location in form["locations"]]
+                    greenhouse_jobs = [
+                        job
+                        for job in greenhouse_jobs
+                        if any(
+                            location in (job.location or "").lower()
+                            for location in locations_lower
+                        )
+                    ]
+                for job in greenhouse_jobs:
+                    if job.url not in seen_urls:
+                        seen_urls.add(job.url)
+                        jobs.append(job)
 
-        # Greenhouse : filtre multi-localisations côté client
-        if "greenhouse" in form["sources"] and form["company_slugs"]:
-            gh_jobs = greenhouse_scraper.search(
-                company_slugs=form["company_slugs"],
-                keywords=form["keywords"] or None,
-                location=None,
+            if "lever" in form["sources"] and form["company_slugs"]:
+                lever_jobs = _lever_scraper().search(
+                    company_slugs=form["company_slugs"],
+                    keywords=form["keywords"] or None,
+                    location=None,
+                )
+                if form["locations"]:
+                    locations_lower = [location.lower() for location in form["locations"]]
+                    lever_jobs = [
+                        job
+                        for job in lever_jobs
+                        if any(
+                            location in (job.location or "").lower()
+                            for location in locations_lower
+                        )
+                    ]
+                for job in lever_jobs:
+                    if job.url not in seen_urls:
+                        seen_urls.add(job.url)
+                        jobs.append(job)
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            requests.RequestException,
+            WTTJConfigurationError,
+        ) as exc:
+            logger.warning("Job search failed: %s", exc)
+            flash(
+                "Une source d'offres est temporairement indisponible. "
+                "Vérifiez la configuration et réessayez.",
+                "error",
             )
-            if form["locations"]:
-                locs_lower = [l.lower() for l in form["locations"]]
-                gh_jobs = [j for j in gh_jobs if any(l in j.location.lower() for l in locs_lower)]
-            for j in gh_jobs:
-                if j.url not in seen_urls:
-                    seen_urls.add(j.url)
-                    jobs.append(j)
+            return _render_index(form=form)
 
-        # Lever : filtre multi-localisations côté client
-        if "lever" in form["sources"] and form["company_slugs"]:
-            lever_jobs = lever_scraper.search(
-                company_slugs=form["company_slugs"],
-                keywords=form["keywords"] or None,
-                location=None,
-            )
-            if form["locations"]:
-                locs_lower = [l.lower() for l in form["locations"]]
-                lever_jobs = [j for j in lever_jobs if any(l in j.location.lower() for l in locs_lower)]
-            for j in lever_jobs:
-                if j.url not in seen_urls:
-                    seen_urls.add(j.url)
-                    jobs.append(j)
-
-        # Filtres contract_type et remote appliqués côté client
-        # (WTTJ les applique déjà via Algolia, mais Greenhouse/Lever non)
-        # Mapping WTTJ → termes ATS (Greenhouse/Lever utilisent des noms différents)
-        CONTRACT_ALIASES = {
-            "internship": ["intern", "internship", "stage"],
-            "full_time": ["full-time", "full time", "fulltime", "cdi"],
-            "part_time": ["part-time", "part time", "parttime"],
-            "apprenticeship": ["apprentice", "apprenticeship", "alternance"],
-            "freelance": ["freelance", "contractor", "contract"],
-            "temporary": ["temporary", "temp", "cdd"],
-        }
         if form["contract_type"]:
-            # Contract type : appliqué à WTTJ, Lever et Greenhouse (inféré depuis le titre pour GH)
-            ct = form["contract_type"].lower()
-            aliases = CONTRACT_ALIASES.get(ct, [ct])
-            jobs = [j for j in jobs if j.contract_type and any(a in j.contract_type.lower() for a in aliases)]
+            aliases = CONTRACT_ALIASES.get(
+                form["contract_type"],
+                [form["contract_type"]],
+            )
+            jobs = [
+                job
+                for job in jobs
+                if job.contract_type
+                and any(alias in job.contract_type.lower() for alias in aliases)
+            ]
         if form["remote"]:
-            rm = form["remote"].lower()
-            jobs = [j for j in jobs if j.source == "WTTJ" or rm in j.remote.lower()]
-
+            remote = form["remote"].lower()
+            jobs = [
+                job
+                for job in jobs
+                if job.source == "WTTJ" or remote in (job.remote or "").lower()
+            ]
         if form["salary_range"]:
             jobs = _filter_by_salary(jobs, form["salary_range"])
 
-        # Marquer les offres déjà sauvegardées
-        saved = storage.saved_urls()
+        saved_urls = _storage().saved_urls()
         results = []
-        for j in jobs:
-            d = j.to_dict()
-            d["is_saved"] = j.url in saved
-            results.append(d)
-
+        for job in jobs:
+            job_dict = job.to_dict()
+            job_dict["is_saved"] = job.url in saved_urls
+            results.append(job_dict)
         flash(f"{len(results)} offres trouvées.", "success")
 
-    return render_template("index.html",
-                           results=results,
-                           form=form,
-                           contract_types=CONTRACT_TYPES,
-                           remote_options=REMOTE_OPTIONS)
+    return _render_index(form=form, results=results)
 
 
-@app.route("/save", methods=["POST"])
 def save_job():
-    """Sauvegarde une offre individuelle (appelé en AJAX)."""
-    job_data = request.get_json()
-    if not job_data or not job_data.get("url"):
-        return jsonify({"error": "Données manquantes"}), 400
+    """Save one job from the browser."""
+    job_data = request.get_json(silent=True)
+    if not isinstance(job_data, dict):
+        return jsonify({"error": "Données JSON manquantes ou invalides"}), 400
 
-    label = (job_data.get("label") or "").strip()
-    saved = storage.save_one(job_data)
-    if label:
-        storage.add_label(job_data["url"], label)
+    try:
+        saved = _storage().save_one(job_data)
+        label = job_data.get("label", "")
+        if label:
+            _storage().add_label(job_data["url"], label)
+    except InvalidJobData as exc:
+        return jsonify({"error": str(exc)}), 422
+    except sqlite3.Error:
+        logger.exception("Could not save job")
+        return jsonify({"error": "Impossible de sauvegarder cette offre"}), 500
     return jsonify({"saved": saved})
 
 
-@app.route("/labels")
 def labels():
-    """Retourne les labels existants (appelé en AJAX pour la pop-up de sauvegarde)."""
-    return jsonify(storage.all_labels())
+    """Return existing labels for the save dialog."""
+    return jsonify(_storage().all_labels())
 
 
-@app.route("/delete", methods=["POST"])
 def delete_job():
-    """Supprime une offre individuelle."""
-    url = request.form.get("url")
-    if url:
-        storage.delete_one(url)
-        flash("Offre supprimée.", "success")
+    """Delete one saved job."""
+    job_url = request.form.get("url", "").strip()
+    if not job_url:
+        return jsonify({"error": "URL manquante"}), 400
+    _storage().delete_one(job_url)
+    flash("Offre supprimée.", "success")
     return redirect(url_for("saved"))
 
 
-@app.route("/saved")
 def saved():
-    jobs = storage.all(order_by="published_at DESC")
+    """Render all saved jobs."""
+    jobs = _storage().all(order_by="published_at DESC")
     for job in jobs:
-        job["labels"] = storage.labels_for_job(job["url"])
+        job["labels"] = _storage().labels_for_job(job["url"])
     return render_template("saved.html", jobs=jobs, count=len(jobs))
 
 
-@app.route("/clear", methods=["POST"])
 def clear():
-    storage.clear()
+    """Delete all saved jobs while retaining the label vocabulary."""
+    _storage().clear()
     flash("Toutes les offres sauvegardées ont été supprimées.", "success")
     return redirect(url_for("saved"))
 
 
+def health():
+    """Return a provider-independent liveness response."""
+    return jsonify({"status": "ok"})
+
+
+def _salary_amount(salary: str | None) -> float | None:
+    if not salary:
+        return None
+    match = re.search(r"(?<!\w)(\d+(?:[.,]\d+)?)\s*(k)?", salary.lower())
+    if not match:
+        return None
+    amount = float(match.group(1).replace(",", "."))
+    if match.group(2):
+        amount *= 1000
+    lower_salary = salary.lower()
+    if "/mois" in lower_salary:
+        amount *= 12
+    elif "/jour" in lower_salary:
+        amount *= 260
+    return amount
+
+
 def _filter_by_salary(jobs, salary_range):
-    ranges = {
-        "0-25k": (0, 25000),
-        "25k-35k": (25000, 35000),
-        "35k-45k": (35000, 45000),
-        "45k-60k": (45000, 60000),
-        "60k+": (60000, float("inf")),
-    }
-    bounds = ranges.get(salary_range)
+    """Filter normalized annual salary values using half-open ranges."""
+    bounds = SALARY_RANGES.get(salary_range)
     if not bounds:
         return jobs
-
     low, high = bounds
     filtered = []
     for job in jobs:
-        if not job.salary:
+        amount = _salary_amount(job.salary)
+        if amount is None:
             continue
-        try:
-            num = float(job.salary.split("-")[0].replace("+", "").replace("≤", ""))
-            if low <= num <= high:
-                filtered.append(job)
-        except (ValueError, IndexError):
-            continue
+        if amount >= low and (high is None or amount < high):
+            filtered.append(job)
     return filtered
 
 
+def create_app(
+    settings: Settings | None = None,
+    *,
+    config: Mapping[str, Any] | None = None,
+    storage_instance: JobStorage | None = None,
+    wttj_scraper_instance: WTTJScraper | None = None,
+    greenhouse_scraper_instance: GreenhouseScraper | None = None,
+    lever_scraper_instance: LeverScraper | None = None,
+) -> Flask:
+    """Create an application with injectable collaborators for tests."""
+    settings = settings or Settings.from_env()
+    app = Flask(
+        __name__,
+        template_folder="web/templates",
+        static_folder="web/static",
+    )
+    app.config.from_mapping(
+        SECRET_KEY=settings.secret_key,
+        TESTING=settings.testing,
+        WTF_CSRF_ENABLED=settings.csrf_enabled,
+        WTF_CSRF_CHECK_DEFAULT=settings.csrf_enabled,
+        SESSION_COOKIE_SECURE=settings.cookie_secure,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        TRUSTSTORE_ENABLED=settings.truststore_enabled,
+    )
+    if config:
+        app.config.from_mapping(config)
+
+    if app.config["TRUSTSTORE_ENABLED"]:
+        truststore.inject_into_ssl()
+    csrf.init_app(app)
+
+    app.extensions["job_storage"] = storage_instance or JobStorage(settings.db_path)
+    app.extensions["wttj_scraper"] = wttj_scraper_instance or WTTJScraper(
+        app_id=settings.wttj_app_id,
+        api_key=settings.wttj_api_key,
+        index_name=settings.wttj_index_name,
+        timeout=settings.wttj_timeout,
+        delay=settings.wttj_delay,
+    )
+    app.extensions["greenhouse_scraper"] = (
+        greenhouse_scraper_instance or GreenhouseScraper()
+    )
+    app.extensions["lever_scraper"] = lever_scraper_instance or LeverScraper()
+    app.extensions["settings"] = settings
+
+    app.add_url_rule("/", "index", index, methods=["GET", "POST"])
+    app.add_url_rule("/save", "save_job", save_job, methods=["POST"])
+    app.add_url_rule("/labels", "labels", labels, methods=["GET"])
+    app.add_url_rule("/delete", "delete_job", delete_job, methods=["POST"])
+    app.add_url_rule("/saved", "saved", saved, methods=["GET"])
+    app.add_url_rule("/clear", "clear", clear, methods=["POST"])
+    app.add_url_rule("/health", "health", health, methods=["GET"])
+
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(error: CSRFError):
+        if request.is_json:
+            return jsonify({"error": error.description}), 400
+        return error.description, 400
+
+    return app
+
+
+app = create_app()
+
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=False, port=5000)

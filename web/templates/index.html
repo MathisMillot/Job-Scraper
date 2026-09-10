@@ -153,7 +153,7 @@
             {% for job in results %}
             <tr>
                 <td><span class="source-badge source-{{ job.source | lower | replace(' ', '') }}">{{ job.source }}</span></td>
-                <td><a href="{{ job.url }}" target="_blank">{{ job.title }}</a></td>
+                <td><a href="{{ job.url }}" target="_blank" rel="noopener noreferrer">{{ job.title }}</a></td>
                 <td>{{ job.company }}</td>
                 <td>{{ job.location }}</td>
                 <td>{{ job.contract_type | replace('_', ' ') | title }}</td>
@@ -185,6 +185,7 @@
         <p>Choisissez un label existant ou créez-en un nouveau avant de sauvegarder.</p>
         <div class="slug-chips" id="existingLabelsChips"></div>
         <input type="text" id="labelInput" placeholder="ex: à postuler, favori...">
+        <p class="modal-error" id="saveError" role="alert" hidden></p>
         <div class="modal-actions">
             <button type="button" class="btn btn-secondary" id="labelCancelBtn">Annuler</button>
             <button type="button" class="btn" id="labelConfirmBtn">Sauvegarder</button>
@@ -284,11 +285,16 @@ const labelInput = document.getElementById('labelInput');
 const labelCancelBtn = document.getElementById('labelCancelBtn');
 const labelConfirmBtn = document.getElementById('labelConfirmBtn');
 const existingLabelsChips = document.getElementById('existingLabelsChips');
+const saveError = document.getElementById('saveError');
+const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
 let pendingSaveBtn = null;
 
 function loadExistingLabels() {
     fetch('/labels')
-        .then(r => r.json())
+        .then(async response => {
+            if (!response.ok) throw new Error('Impossible de charger les labels.');
+            return response.json();
+        })
         .then(existingLabels => {
             existingLabelsChips.innerHTML = '';
             existingLabels.forEach(label => {
@@ -300,15 +306,20 @@ function loadExistingLabels() {
                 existingLabelsChips.appendChild(chip);
             });
         })
-        .catch(() => {});
+            .catch(error => {
+                saveError.textContent = error.message;
+                saveError.hidden = false;
+            });
 }
 
 function openLabelModal(btn) {
-    pendingSaveBtn = btn;
-    labelInput.value = '';
-    labelModal.hidden = false;
-    labelInput.focus();
-    loadExistingLabels();
+        pendingSaveBtn = btn;
+        labelInput.value = '';
+        saveError.textContent = '';
+        saveError.hidden = true;
+        labelModal.hidden = false;
+        labelInput.focus();
+        loadExistingLabels();
 }
 
 function closeLabelModal() {
@@ -316,21 +327,32 @@ function closeLabelModal() {
     pendingSaveBtn = null;
 }
 
-function submitSave(btn, label) {
-    const job = JSON.parse(btn.dataset.job);
-    if (label) job.label = label;
+async function submitSave(btn, label) {
+    try {
+        const job = JSON.parse(btn.dataset.job);
+        if (label) job.label = label;
 
-    fetch('/save', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(job),
-    })
-    .then(r => r.json())
-    .then(data => {
+        const response = await fetch('/save', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken,
+            },
+            body: JSON.stringify(job),
+        });
+        const data = await response.json();
+        if (!response.ok || data.error) {
+            throw new Error(data.error || 'Impossible de sauvegarder cette offre.');
+        }
         btn.textContent = 'Sauvegardé';
         btn.classList.add('saved');
         btn.disabled = true;
-    });
+        return true;
+    } catch (error) {
+        saveError.textContent = error.message;
+        saveError.hidden = false;
+        return false;
+    }
 }
 
 document.querySelectorAll('.btn-save:not(.saved)').forEach(btn => {
@@ -338,13 +360,13 @@ document.querySelectorAll('.btn-save:not(.saved)').forEach(btn => {
 });
 
 labelCancelBtn.addEventListener('click', () => {
-    if (pendingSaveBtn) submitSave(pendingSaveBtn, '');
     closeLabelModal();
 });
 
-labelConfirmBtn.addEventListener('click', () => {
-    if (pendingSaveBtn) submitSave(pendingSaveBtn, labelInput.value.trim());
-    closeLabelModal();
+labelConfirmBtn.addEventListener('click', async () => {
+    if (!pendingSaveBtn) return;
+    const saved = await submitSave(pendingSaveBtn, labelInput.value.trim());
+    if (saved) closeLabelModal();
 });
 
 labelInput.addEventListener('keydown', (e) => {
@@ -356,7 +378,6 @@ labelInput.addEventListener('keydown', (e) => {
 
 labelModal.addEventListener('click', (e) => {
     if (e.target === labelModal) {
-        if (pendingSaveBtn) submitSave(pendingSaveBtn, '');
         closeLabelModal();
     }
 });
